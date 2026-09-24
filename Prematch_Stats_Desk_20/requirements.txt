@@ -1,0 +1,2 @@
+# Prematch Stats Desk — solo librería estándar de Python.
+# Render exige este archivo; no hay paquetes extra.

@@ -55,3 +55,5 @@ Otras opciones gratis:
 - Fly.io (capa gratuita pequeña)
 
 GitHub Pages NO sirve: no ejecuta Python.
+
+Guía PythonAnywhere: abrí PYTHONANYWHERE.txt

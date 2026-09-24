@@ -1,0 +1,72 @@
+Cómo subir Prematch Stats Desk a PythonAnywhere
+================================================
+
+Ojo importante
+--------------
+En la cuenta GRATIS de PythonAnywhere el servidor NO puede entrar a
+cualquier web. FotMob / SofaScore / ESPN suelen estar bloqueados.
+Resultado: la interfaz abre, pero el calendario y las estadísticas
+pueden salir vacíos.
+
+Para que jale datos reales necesitás el plan de pago más barato
+(Hacker, ~5 USD/mes) que tiene internet sin lista blanca.
+
+Si querés gratis de verdad para esta app, Render es más simple:
+la app ya corre con "python3 app.py".
+
+
+Pasos en PythonAnywhere (gratis o de pago)
+------------------------------------------
+
+1) Creá cuenta en https://www.pythonanywhere.com
+
+2) En Files (Archivos):
+   - New directory: Prematch_Stats_Desk_20
+   - Upload app.py, wsgi.py, README.txt
+
+   O en Bash console:
+       cd ~
+       unzip Prematch_Stats_Desk_20.zip
+
+3) Web → Add a new web app
+   - Manual configuration
+   - Python 3.13 (o el más nuevo que ofrezcan)
+
+4) En la ficha Web, Source code:
+       /home/TUUSUARIO/Prematch_Stats_Desk_20
+
+   Working directory:
+       /home/TUUSUARIO/Prematch_Stats_Desk_20
+
+5) Editá el archivo WSGI (el que PythonAnywhere crea) y dejalo así,
+   cambiando TUUSUARIO:
+
+       import sys
+       path = "/home/TUUSUARIO/Prematch_Stats_Desk_20"
+       if path not in sys.path:
+           sys.path.insert(0, path)
+       from wsgi import application
+
+6) Reload verde (Reload).
+
+7) Entrá a:
+       https://TUUSUARIO.pythonanywhere.com
+
+
+No hagas esto
+-------------
+- No ejecutes "python app.py" en la consola esperando URL pública.
+  Eso solo sirve en tu PC (puerto 8765).
+- No uses GitHub Pages: no corre Python.
+
+
+Si el Reload falla
+------------------
+Web → Log files → Error log.
+El error más común es no cambiar TUUSUARIO en la ruta del WSGI.
+
+
+Plan de pago
+------------
+Account → Upgrade to Hacker.
+Después Reload. Ahí sí FotMob suele responder y ves partidos reales.
