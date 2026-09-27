@@ -57,3 +57,43 @@ Otras opciones gratis:
 GitHub Pages NO sirve: no ejecuta Python.
 
 Guía PythonAnywhere: abrí PYTHONANYWHERE.txt
+
+
+CORRECCIÓN PARA RENDER — ESTADÍSTICAS
+-------------------------------------
+La versión actualizada ya no deja que un fallo de FotMob o del módulo de
+tarjetas derribe /api/team-stats. Si FotMob responde 403/5xx, intenta
+SofaScore/ESPN y devuelve un estado controlado en lugar de un 502 genérico.
+
+RECOMENDADO EN RENDER: API-FOOTBALL
+-----------------------------------
+Para evitar depender de una IP compartida que pueda ser bloqueada por
+FotMob, la app soporta API-Football como fuente principal cuando existe
+la variable de entorno:
+
+    API_FOOTBALL_KEY
+
+En Render:
+1. Service -> Environment -> Add Environment Variable.
+2. Key: API_FOOTBALL_KEY
+3. Value: tu clave de API-Football/API-Sports.
+4. Guardá y hacé Manual Deploy -> Deploy latest commit.
+
+No pongas la clave dentro de app.py ni la subas a GitHub.
+
+API-Football obtiene los últimos partidos del equipo y puede recuperar
+estadísticas de hasta 20 fixtures en una consulta por lote. Si una
+competición no publica una estadística concreta, esa celda queda como
+"Dato no disponible"; no se inventan valores.
+
+IMPORTANTE
+----------
+Render no necesita una configuración especial de proxy para este código.
+Debe ejecutarse como Web Service y escuchar HOST=0.0.0.0 y PORT=$PORT,
+lo que app.py ya hace. Procfile ya contiene:
+
+    web: python3 app.py
+
+La versión actual también redujo el barrido histórico de FotMob y agregó
+reintentos solo para errores transitorios. Un 403 de FotMob activa el
+fallback en vez de repetirlo indefinidamente.
