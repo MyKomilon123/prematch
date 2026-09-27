@@ -404,7 +404,8 @@ def _summary_from_rows(name,rows,source,source_status="OK"):
         return {"wins":sum(r.get("result")=="G" for r in rs),"draws":sum(r.get("result")=="E" for r in rs),"losses":sum(r.get("result")=="P" for r in rs)}
     return {"team":name,"matches":len(rows),"source":source,"source_status":source_status,
             "metrics":fields,"records":{"all":record(rows),"home":record(local),"away":record(away)},
-            "recent":rows,"universal_trends":_universal_trends(rows),"corner_profile":_corner_profile(rows)}
+            "recent":rows,"universal_trends":_universal_trends(rows),"corner_profile":_corner_profile(rows),
+            "venue_profile":_venue_profile({"recent":rows,"records":{"all":record(rows),"home":record(local),"away":record(away)}})}
 
 # ---------------- Fallback público ESPN ----------------
 # SofaScore puede devolver 403 según la IP/red. En ese caso se intenta ESPN.
@@ -437,6 +438,9 @@ def _names_compatible(a, b):
         return False
     if na==nb:
         return True
+    ra=str(a or "").lower(); rb=str(b or "").lower()
+    if ("fc andorra" in ra and "fc" not in rb and "andorra" in rb) or ("fc andorra" in rb and "fc" not in ra and "andorra" in ra):
+        return False
     ta=_significant_tokens(a); tb=_significant_tokens(b)
     if not ta or not tb:
         return False
@@ -718,12 +722,18 @@ _FOTMOB_SEED = {
     "cusco":39634,"melgar":39633,
     "criciuma":7729,"criciuma ec":7729,
     "operario pr":197429,"operario-pr":197429,"operario ferroviario":197429,
-    "operario":197429,"juventude":7790,"cuiaba":7766,"crb":7767,
-    "fortaleza":8111,"botafogo sp":7798,"goias":7793,"nautico":7796,
-    "novorizontino":193626,"vila nova":7794,"ponte preta":7800,
-    "sport recife":7801,"sport":7801,"sao bernardo":196513,
-    "america mg":7630,"atletico go":7781,"atletico-go":7781,
-    "londrina":7784,"avai":7789,"athletic club mg":196226,
+    "operario":197429,
+    "juventude":10274,"cuiaba":197815,"crb":104821,
+    "fortaleza":8287,"botafogo sp":8355,"botafogo-sp":8355,
+    "goias":9862,"nautico":2369,
+    "novorizontino":581838,"gremio novorizontino":581838,
+    "vila nova":109706,"ponte preta":8630,
+    "sport recife":6305,"sao bernardo":231931,"sao bernardo fc":231931,
+    "america mg":1757,"america-mg":1757,
+    "atletico go":165545,"atletico-go":165545,"atletico goianiense":165545,
+    "londrina":298660,"avai":104822,
+    "athletic club mg":1221604,"athletic-mg":1221604,"athletic mg":1221604,
+    "ceara":172341,
     # Colombia · Liga BetPlay Dimayor
     "america de cali":10280,"america":10280,
     "millonarios":4403,"atletico nacional":6368,"nacional":6368,
@@ -817,10 +827,78 @@ def _looks_uruguay(*names):
     blob=" ".join(_norm_team_name(x) for x in names if x)
     return any(k in blob for k in ("maldonado","wanderers","penarol","danubio","auf","cerro largo","boston river","torque","juventud de las piedras","cerrito","progreso"))
 
+
+# Selecciones (no clubes). Andorra ≠ FC Andorra (494050).
+NAT_IDS={
+    "andorra":10045,"malta":8495,"gibraltar":507764,"liechtenstein":5799,
+    "san marino":6035,"faroe islands":8269,"islas feroe":8269,
+    "luxembourg":8512,"luxemburgo":8512,"kosovo":507763,
+    "wales":5790,"gales":5790,"scotland":8498,"escocia":8498,
+    "northern ireland":10259,"irlanda del norte":10259,
+    "republic of ireland":8273,"ireland":8273,"irlanda":8273,"rep of ireland":8273,
+    "england":8491,"inglaterra":8491,"france":6723,"francia":6723,
+    "germany":8570,"alemania":8570,"spain":6720,"espana":6720,
+    "italy":6471,"italia":6471,"portugal":8361,"netherlands":6708,"paises bajos":6708,
+    "belgium":8263,"belgica":8263,"denmark":8238,"dinamarca":8238,
+    "norway":8492,"noruega":8492,"sweden":8520,"suecia":8520,
+    "switzerland":6717,"suiza":6717,"austria":8255,"poland":8568,"polonia":8568,
+    "czech":8496,"czechia":8496,"chequia":8496,"hungary":8565,"hungria":8565,
+    "croatia":10155,"croacia":10155,"serbia":8205,"greece":6383,"grecia":6383,
+    "turkey":6595,"turkiye":6595,"turquia":6595,"romania":9730,"bulgaria":10150,
+    "ukraine":6718,"ucrania":6718,"russia":10145,"rusia":10145,
+    "israel":6711,"cyprus":5793,"chipre":5793,"georgia":8268,"armenia":6583,
+    "azerbaijan":8566,"albania":10024,"bosnia":10106,"bosnia and herzegovina":10106,
+    "north macedonia":8260,"macedonia":8260,"slovenia":5787,"slovakia":8497,
+    "estonia":8261,"latvia":8266,"lithuania":8301,"lituania":8301,
+    "iceland":8536,"finland":7871,"moldova":8302,
+    "brazil":8256,"brasil":8256,"argentina":6706,"uruguay":5796,"chile":9762,
+    "colombia":8258,"peru":5798,"ecuador":6707,"paraguay":6724,"bolivia":5797,
+    "venezuela":8494,"mexico":6709,"usa":6713,"canada":5810,
+    "japan":6715,"japon":6715,"south korea":7804,"corea del sur":7804,"korea":7804,
+    "china":5822,"australia":6716,"new zealand":5820,"nueva zelanda":5820,
+    "morocco":6722,"marruecos":6722,"algeria":6317,"tunisia":6719,"egypt":10255,
+    "nigeria":6346,"ghana":6714,"senegal":6395,"cameroon":6629,"south africa":6316,
+    "qatar":5902,"uae":5789,"saudi arabia":7795,"arabia saudita":7795,"iran":8493,
+    "india":6329,"indonesia":6324,"thailand":5788,"vietnam":5894,
+    "palestine":6333,"palestina":6333,"laos":178670,"brunei":178671,
+    "myanmar":6330,"timor leste":95801,"timor-leste":95801,
+}
+CLUB_MASK={
+    "fc andorra":494050,"andorra fc":494050,
+}
+
+def _is_national_name(name):
+    w=_norm_team_name(name)
+    if not w:
+        return False
+    if w in NAT_IDS:
+        return True
+    if w.endswith(" u21") or w.endswith(" u20") or w.endswith(" u23") or w.endswith(" u19"):
+        return True
+    return False
+
+def _looks_international(*names):
+    blob=" ".join(_norm_team_name(x) for x in names if x)
+    return any(k in blob for k in (
+        "nations league","friendlies","friendly","qualifier","qualifiers",
+        "euro 20","world cup","copa america","nations","seleccion",
+        "internacional","uefa euro","afcon","gold cup","asian cup"
+    ))
+
 def resolve_fotmob_id(name, peer=""):
+    raw=" ".join(str(x or "").lower() for x in (name, peer))
+    if "fc andorra" in raw or "andorra fc" in raw:
+        # Solo si el propio nombre es el club.
+        mine=str(name or "").lower()
+        if "fc andorra" in mine or "andorra fc" in mine:
+            return 494050
     wanted=_norm_team_name(name)
     if not wanted:
         return None
+    # Andorra / Malta a secas = selección.
+    if wanted in NAT_IDS and wanted not in ("nacional","sport","racing","wanderers"):
+        if "fc "+wanted not in str(name or "").lower():
+            return NAT_IDS[wanted]
     if _looks_uruguay(name, peer) or wanted in URU_IDS:
         if wanted in URU_IDS:
             return URU_IDS[wanted]
@@ -919,6 +997,24 @@ def _fotmob_pair_stats(match_id):
                         if isinstance(t,(int,float)) and t<=45:
                             goals+=1
         return goals
+    def _count_cards(evs):
+        y=[0,0]; r=[0,0]; seen=False
+        for ev in evs or []:
+            typ=str(ev.get("type") or ev.get("typeStr") or "")
+            card=str(ev.get("card") or ev.get("cardType") or ev.get("name") or ev.get("reason") or "")
+            blob=(typ+" "+card).lower()
+            if "card" not in blob and "yellow" not in blob and "red" not in blob:
+                continue
+            seen=True
+            idx=0 if ev.get("isHome") else 1
+            if "red" in blob or "second" in blob or "2nd" in blob:
+                r[idx]+=1
+                if "second" in blob or "2nd" in blob:
+                    y[idx]+=1
+            else:
+                y[idx]+=1
+        return (y,r,seen)
+    card_y,card_r,has_card_events=_count_cards(evlist)
     vals={}
     periods=(((data.get("content") or {}).get("stats") or {}).get("Periods") or {})
     allp=(periods.get("All") or {}).get("stats") or []
@@ -929,6 +1025,7 @@ def _fotmob_pair_stats(match_id):
         "corners":"corners","yellow_cards":"yellow","yellow cards":"yellow",
         "red_cards":"red","red cards":"red","fouls":"fouls",
         "throwins":"throwins","throw-ins":"throwins","throw ins":"throwins",
+        "player_throws":"throwins","throws":"throwins","throw":"throwins",
         "tackles":"tackles","offsides":"offsides","offside":"offsides",
         "freekicks":"freekicks","free kicks":"freekicks",
         "goalkicks":"goalkicks","goal kicks":"goalkicks",
@@ -950,6 +1047,15 @@ def _fotmob_pair_stats(match_id):
             a=_num(pair[1] if len(pair)>1 else None)
             if h is not None or a is not None:
                 vals[mapped]=(h,a)
+    # En varias ligas (Série B, etc.) FotMob deja yellow_cards en 0
+    # y publica las tarjetas reales en events.events.
+    if has_card_events:
+        sy=vals.get("yellow") or (0,0)
+        if (sy[0] or 0)+(sy[1] or 0) < (card_y[0]+card_y[1]):
+            vals["yellow"]=(card_y[0], card_y[1])
+        sr=vals.get("red") or (0,0)
+        if (sr[0] or 0)+(sr[1] or 0) < (card_r[0]+card_r[1]):
+            vals["red"]=(card_r[0], card_r[1])
     return {
         "home_id":home.get("id"),"away_id":away.get("id"),
         "home_name":home.get("name"),"away_name":away.get("name"),
@@ -984,8 +1090,15 @@ def _fotmob_matches_on_day(date_str, team_id):
             out.append(ev)
     return out
 
-def fotmob_recent_team_stats(name, limit=RECENT_LIMIT, peer=""):
-    tid=resolve_fotmob_id(name, peer)
+def fotmob_recent_team_stats(name, limit=RECENT_LIMIT, peer="", team_id=None):
+    tid=None
+    try:
+        if team_id not in (None,""):
+            tid=int(team_id)
+    except Exception:
+        tid=None
+    if not tid:
+        tid=resolve_fotmob_id(name, peer)
     if not tid:
         raise ValueError(f"FotMob no encontró el equipo: {name}")
     data=_fotmob_get(f"{FOTMOB}/teams?id={tid}", timeout=16) or {}
@@ -1180,10 +1293,10 @@ def india_recent_team_stats(name, limit=RECENT_LIMIT):
         raise ValueError("No hay resultados publicados verificables de Super Division India para este equipo")
     return rows[:limit]
 
-def summarize_team_with_fallback(name,limit=RECENT_LIMIT, peer=""):
+def summarize_team_with_fallback(name,limit=RECENT_LIMIT, peer="", team_id=None):
     errors=[]
     try:
-        rows=fotmob_recent_team_stats(name,limit,peer=peer)
+        rows=fotmob_recent_team_stats(name,limit,peer=peer,team_id=team_id)
         if rows:
             return _summary_from_rows(name,rows,"FotMob")
         errors.append("FotMob no entregó partidos finalizados verificables.")
@@ -1219,8 +1332,88 @@ def _unavailable_summary(name, reason, source="SofaScore"):
             "metrics":fields,"records":{"all":empty,"home":empty,"away":empty},"recent":[],"corner_profile":{"available":False,"sample":0}}
 
 @lru_cache(maxsize=256)
-def summarize_team(name,limit=RECENT_LIMIT, peer=""):
-    return summarize_team_with_fallback(name,limit,peer=peer)
+def summarize_team(name,limit=RECENT_LIMIT, peer="", team_id=""):
+    return summarize_team_with_fallback(name,limit,peer=peer,team_id=team_id or None)
+
+
+def fotmob_card_risk(tid, limit=5):
+    """Top jugadores con más amarillas en la liga actual del equipo (dato FotMob)."""
+    try:
+        tid=int(tid)
+    except Exception:
+        return {"available":False,"players":[],"reason":"Sin ID de equipo"}
+    if tid<=0:
+        return {"available":False,"players":[],"reason":"Sin ID de equipo"}
+    try:
+        data=_fotmob_get(f"{FOTMOB}/teams?id={tid}", timeout=14) or {}
+    except Exception as e:
+        return {"available":False,"players":[],"reason":str(e)[:160]}
+    groups=((data.get("stats") or {}).get("players") or [])
+    group=None
+    for g in groups:
+        title=str(g.get("header") or g.get("name") or "").lower()
+        if "yellow" in title or "amarill" in title:
+            group=g; break
+    rows=[]
+    if group:
+        url=group.get("fetchAllUrl") or ""
+        team_id=int(((data.get("details") or {}).get("id") or tid) or tid)
+        if url:
+            try:
+                import gzip
+                req=urllib.request.Request(url, headers={
+                    "User-Agent":"Mozilla/5.0",
+                    "Accept":"application/json",
+                    "Accept-Encoding":"gzip",
+                    "Referer":"https://www.fotmob.com/",
+                })
+                with urllib.request.urlopen(req, timeout=12) as r:
+                    raw=r.read()
+                if raw[:2]==bytes([31,139]):
+                    raw=gzip.decompress(raw)
+                blob=json.loads(raw.decode("utf-8","replace") or "{}")
+                statlist=((blob.get("TopLists") or [{}])[0].get("StatList") or [])
+                for p in statlist:
+                    if int(p.get("TeamId") or 0)!=team_id:
+                        continue
+                    cards=p.get("StatValue") or p.get("StatValueCount") or 0
+                    mp=p.get("MatchesPlayed") or 0
+                    try:
+                        cards=float(cards); mp=float(mp)
+                    except Exception:
+                        continue
+                    pct=None
+                    if mp>0:
+                        pct=min(92, round(100.0*(cards/mp)))
+                    rows.append({
+                        "name":p.get("ParticipantName") or "—",
+                        "yellows":int(cards) if float(cards).is_integer() else cards,
+                        "matches":int(mp) if float(mp).is_integer() else mp,
+                        "pct":pct,
+                    })
+                    if len(rows)>=limit:
+                        break
+            except Exception:
+                rows=[]
+        if len(rows)<limit:
+            seen={_norm_team_name(x["name"]) for x in rows}
+            for p in (group.get("topThree") or []):
+                nm=p.get("name") or "—"
+                if _norm_team_name(nm) in seen:
+                    continue
+                val=p.get("value")
+                if isinstance(p.get("stat"), dict):
+                    val=p["stat"].get("value", val)
+                try:
+                    cards=float(val)
+                except Exception:
+                    continue
+                rows.append({"name":nm,"yellows":int(cards) if float(cards).is_integer() else cards,"matches":None,"pct":None})
+                if len(rows)>=limit:
+                    break
+    if not rows:
+        return {"available":False,"players":[],"reason":"FotMob no publicó ranking de amarillas de este equipo"}
+    return {"available":True,"players":rows[:limit],"source":"FotMob","note":"Porcentaje = amarillas / partidos jugados en la liga actual. No es cuota."}
 
 def fotmob_logo_url(tid):
     try:
@@ -1266,6 +1459,8 @@ def _local_fotmob_id(name):
     wanted=_norm_team_name(name)
     if not wanted:
         return None
+    if wanted in NAT_IDS:
+        return NAT_IDS[wanted]
     if wanted in URU_IDS:
         return URU_IDS[wanted]
     if wanted in _FOTMOB_SEED:
@@ -3331,8 +3526,18 @@ def calendar_for_date(date_str):
                         t=ev.get(side) or {}
                         tid=t.get("id"); nm=t.get("name") or t.get("longName")
                         if tid and nm:
-                            _FOTMOB_INDEX[_logo_key(nm)]=int(tid)
-                            _FOTMOB_INDEX[_norm_team_name(nm)]=int(tid)
+                            full=_norm_team_name(nm)
+                            key=_logo_key(nm)
+                            tid=int(tid)
+                            # No pisar la selección Andorra con FC Andorra.
+                            if full in NAT_IDS and tid!=NAT_IDS[full]:
+                                _FOTMOB_INDEX[key]=tid
+                            else:
+                                if full not in NAT_IDS or tid==NAT_IDS.get(full):
+                                    _FOTMOB_INDEX[full]=tid
+                                _FOTMOB_INDEX[key]=tid
+                                if full in NAT_IDS:
+                                    NAT_IDS.setdefault(full, tid)
         except Exception:
             pass
         return data
@@ -3348,6 +3553,8 @@ def calendar_for_date(date_str):
             lname=lg.get("name") or "Fútbol"
             ccode=str(lg.get("ccode") or "")
             pais=CCODE_NAME.get(ccode.upper(), ccode or "Internacional")
+            if ccode.upper() in ("INT","EUR","WWC","INTW") or any(k in lname.lower() for k in ("nations league","friendlies","friendly","world cup","euro qual","euro u21","copa america","gold cup","afcon","asian cup","olymp")):
+                pais="Internacional"
             if ccode.upper()=="COL" and any(k in lname.lower() for k in ("primera a","clausura","apertura","betplay")):
                 lname="Liga BetPlay Dimayor"; pais="Colombia"
             low_lg=lname.lower()
@@ -3361,8 +3568,32 @@ def calendar_for_date(date_str):
                     lname="Indian Super League"
                 elif "i-league" in low_lg or "i league" in low_lg:
                     lname="I-League"
-            if ccode.upper() in ("JPN","JAP","JAPAN") and _is_women_competition(lname) and any(k in lname.lower() for k in ("cup","copa","we league")):
-                lname="Copa de la Liga (F)"; pais="Japón"
+            if ccode.upper() in ("JPN","JAP","JAPAN") or "j. league" in low_lg or "japan" in low_lg:
+                pais="Japón"
+                if "j. league 3" in low_lg or low_lg in ("j3","j3 league"):
+                    lname="J3 League"
+                elif "j. league 2" in low_lg or low_lg in ("j2","j2 league"):
+                    lname="J2 League"
+                elif low_lg in ("j. league","j1","j1 league","j.league"):
+                    lname="J1 League"
+                elif "japan football league" in low_lg or low_lg=="jfl":
+                    lname="JFL"
+                elif "we league" in low_lg and "cup" not in low_lg:
+                    lname="WE League"
+                elif any(k in low_lg for k in ("empress","nadeshiko")):
+                    lname="Empress Cup"
+                elif _is_women_competition(lname) and "cup" in low_lg:
+                    lname="Copa de la Liga (F)"
+                elif "league cup" in low_lg or low_lg=="cup":
+                    lname="Copa J.League"
+            if "friend" in low_lg or "amist" in low_lg:
+                pais="Internacional"
+                if "club" in low_lg:
+                    lname="Amistoso de clubes"
+                elif "u21" in low_lg:
+                    lname="Amistoso Sub-21"
+                else:
+                    lname="Amistoso"
             if ccode.upper() in ("URU","UY","URUGUAY") or "uruguay" in lname.lower():
                 if any(k in lname.lower() for k in ("copa","cup","auf uruguay")) and "liga auf" not in lname.lower() and "clausura" not in lname.lower() and "apertura" not in lname.lower():
                     lname="Copa AUF Uruguay"; pais="Uruguay"
@@ -3401,6 +3632,7 @@ def calendar_for_date(date_str):
                     "timestamp":utc,"fecha":date_str,
                     "logo_l":fotmob_logo_url(home.get("id")),
                     "logo_v":fotmob_logo_url(away.get("id")),
+                    "home_id":home.get("id"),"away_id":away.get("id"),
                     "top_flight":is_top_flight_league(lname, pais) or row_top,
                     "is_cup":is_cup_competition(lname, pais),
                     "sexo":"F" if row_women else "M",
@@ -3919,6 +4151,77 @@ def _style_profile(summary):
     detail=" · ".join(bits) if bits else detail
     return {"label":style,"detail":detail,"possession":poss,"shots":shots,"kind":kind}
 
+
+def _avg_key(rows, key):
+    vals=[]
+    for r in rows or []:
+        v=r.get(key)
+        if v is None: continue
+        try: vals.append(float(v))
+        except Exception: pass
+    if not vals: return None
+    return round(sum(vals)/len(vals),2)
+
+def _venue_profile(summary):
+    rows=(summary or {}).get("recent") or []
+    home=[r for r in rows if r.get("venue")=="Local"]
+    away=[r for r in rows if r.get("venue")=="Visitante"]
+    rec=((summary or {}).get("records") or {})
+    def pack(rs, recs):
+        n=len(rs)
+        w=(recs or {}).get("wins",0); d=(recs or {}).get("draws",0); l=(recs or {}).get("losses",0)
+        return {
+            "n":n,"shots":_avg_key(rs,"shots"),"sot":_avg_key(rs,"sot"),
+            "goals_for":_avg_key(rs,"goals_for"),"corners":_avg_key(rs,"corners"),
+            "yellow":_avg_key(rs,"yellow"),"throwins":_avg_key(rs,"throwins"),
+            "record":f"{w}G-{d}E-{l}P" if n else "—",
+        }
+    h=pack(home, rec.get("home")); a=pack(away, rec.get("away"))
+    shots_note="Sin remates casa/visita verificables."
+    form_note="Sin racha de visitante verificable."
+    if h["shots"] is not None and a["shots"] is not None:
+        diff=round(a["shots"]-h["shots"],1)
+        if diff<=-2.5:
+            shots_note=f"De visita remata menos ({a['shots']} vs {h['shots']} en casa)."
+        elif diff>=2.0:
+            shots_note=f"De visita remata más ({a['shots']} vs {h['shots']} en casa)."
+        else:
+            shots_note=f"Remates parecidos casa/visita ({h['shots']} / {a['shots']})."
+    aw=rec.get("away") or {}
+    an=(aw.get("wins",0)+aw.get("draws",0)+aw.get("losses",0))
+    if an>=3:
+        wr=aw.get("wins",0)/an
+        if wr<=0.25 and aw.get("losses",0)>=aw.get("wins",0)+1:
+            form_note="De visita viene flojo (pocas victorias fuera)."
+        elif wr>=0.5:
+            form_note="De visita no se achica (racha aceptable fuera)."
+        else:
+            form_note="De visita es irregular."
+    return {"home":h,"away":a,"shots_note":shots_note,"away_form_note":form_note}
+
+def _briefing_text(home_name, away_name, home_need, away_need, hs, aws, intensity):
+    hv=_venue_profile(hs); av=_venue_profile(aws)
+    bits=[]
+    hl=home_need.get("level") or "Baja"; al=away_need.get("level") or "Baja"
+    if hl=="Alta" and al=="Alta":
+        bits.append(f"Urgencia alta en los dos: {home_name} ({home_need.get('label')}) y {away_name} ({away_need.get('label')}). Partido con necesidad real.")
+    elif hl=="Alta":
+        bits.append(f"Urgencia del local: {home_name} {home_need.get('label')}. {home_need.get('detail') or ''}")
+    elif al=="Alta":
+        bits.append(f"Urgencia del visitante: {away_name} {away_need.get('label')}. {away_need.get('detail') or ''}")
+    elif hl=="Media" or al=="Media":
+        bits.append("Necesidad media: hay puntos en juego, pero no es final de temporada todavía.")
+    else:
+        bits.append("Necesidad baja o no verificable en tabla. El partido puede ir más suelto.")
+    bits.append(f"{home_name} en casa: {hv['shots_note']}")
+    bits.append(f"{away_name} fuera: {av['shots_note']} {av['away_form_note']}")
+    ashot=(av.get("away") or {}).get("shots"); hhome=(hv.get("home") or {}).get("shots")
+    if ashot is not None and hhome is not None and ashot+3 < hhome:
+        bits.append(f"{away_name} de visita se queda corto de remates frente a lo que {home_name} produce en casa.")
+    inten=(intensity or {}).get("label") or "NORMAL"
+    bits.append(f"Intensidad leída: {inten}. {intensity.get('detail') if intensity else ''}")
+    return {"available":True,"paragraphs":[b.strip() for b in bits if b and b.strip()]}
+
 def _level_compare(home_name, away_name, home_table, away_table, hs, aws):
     hf=_form_line(hs); af=_form_line(aws)
     notes=[]
@@ -4002,6 +4305,9 @@ def prematch_context(home_name, away_name, date_str="2026-09-22"):
     }
     result["tension"]=_card_tension(hs,aws,h2h)
     result["intensity"]=_intensity_profile(home_need,away_need,hs,aws,h2h,result["competition"])
+    result["home"]["venue"]=_venue_profile(hs)
+    result["away"]["venue"]=_venue_profile(aws)
+    result["briefing"]=_briefing_text(home_name,away_name,home_need,away_need,hs,aws,result["intensity"])
     always=[]
     for item in (h2h or {}).get("universal") or []:
         if isinstance(item, dict):
@@ -4274,8 +4580,20 @@ def _fotmob_pair_match_ids(hid, aid):
                     seen.add(ev.get("id")); ids.append(ev.get("id"))
     return ids
 
-def _h2h_matches_fotmob(home_name, away_name):
-    hid=fotmob_team_id(home_name); aid=fotmob_team_id(away_name)
+def _h2h_matches_fotmob(home_name, away_name, home_id=None, away_id=None):
+    hid=aid=None
+    try:
+        if home_id not in (None,""): hid=int(home_id)
+    except Exception:
+        hid=None
+    try:
+        if away_id not in (None,""): aid=int(away_id)
+    except Exception:
+        aid=None
+    if not hid: hid=resolve_fotmob_id(home_name, away_name) or fotmob_team_id(home_name)
+    if not aid: aid=resolve_fotmob_id(away_name, home_name) or fotmob_team_id(away_name)
+    if not hid or not aid:
+        return []
     seed_ids=_fotmob_pair_match_ids(hid, aid)
     meetings=[]
     seen=set()
@@ -4376,14 +4694,14 @@ def _h2h_matches_fotmob(home_name, away_name):
         r["stats"]=stats
     return meetings
 
-def h2h_summary(home_name, away_name):
+def h2h_summary(home_name, away_name, home_id=None, away_id=None):
     # Un 403/bloqueo de una fuente NO significa que no existan H2H.
     # Cada proveedor se intenta de forma independiente y se cae al siguiente.
     rows=[]
     source=None
 
     try:
-        rows=_h2h_matches_fotmob(home_name,away_name) or []
+        rows=_h2h_matches_fotmob(home_name,away_name,home_id=home_id,away_id=away_id) or []
         if rows:
             source="FotMob"
     except Exception:
@@ -4802,7 +5120,7 @@ header{text-align:center;padding:24px 30px;border-bottom:1px solid var(--line);b
 .miniCrest{width:30px;height:30px;object-fit:contain;flex:0 0 30px}.boxTitle{display:flex;align-items:center;gap:9px}.boxCrest{width:30px;height:30px;object-fit:contain}.today th,.today td,.recent th,.recent td,.compare th,.compare td{padding:8px 7px;border-bottom:1px solid #17304c;text-align:left;font-size:12px}.today th,.recent th,.compare th{color:var(--muted);font-weight:700}.today tr:hover{background:#102137}.load{border-color:#31557b}
 .matchHero{display:grid;grid-template-columns:1fr 105px 1fr;align-items:center;border-radius:14px;overflow:hidden;border:1px solid var(--line);background:#091728;margin-bottom:15px}.teamHero{padding:12px;text-align:center}.teamHero.home{background:linear-gradient(115deg,#08284a,#0b1726)}.teamHero.away{background:linear-gradient(245deg,#351127,#0b1726)}.teamHero .crest{width:52px;height:52px;object-fit:contain;display:block;margin:0 auto 8px}.teamHero h2{margin:0;font-size:20px}.kick{text-align:center;padding:18px}.kick b{font-size:18px;display:block}.kick span{display:block;color:var(--muted);margin-top:5px}
 .dual{display:grid;grid-template-columns:1fr 1fr;gap:14px}.teamBox{position:relative;background:linear-gradient(145deg,#071728 0%,#081522 52%,#06111e 100%);border:1px solid #183b5e;border-radius:15px;padding:16px 16px 13px;overflow:hidden;box-shadow:0 10px 28px rgba(0,0,0,.20)}.teamBox::before{content:"";position:absolute;inset:0;pointer-events:none;background:radial-gradient(circle at 10% 0%,rgba(37,168,255,.08),transparent 34%),radial-gradient(circle at 100% 100%,rgba(84,108,255,.05),transparent 38%)}.teamBox.awayBox{background:linear-gradient(145deg,#071728 0%,#081522 52%,#0c1020 100%)}.teamTitle{position:relative;z-index:1;display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:13px}.teamTitle .boxTitle{min-width:0}.teamTitle b{font-size:18px;letter-spacing:.1px}.teamTitle .teamMeta{display:block;color:#79a4c8;font-size:11px;margin-top:2px}.status{display:inline-flex;align-items:center;gap:6px;flex:0 0 auto;padding:6px 9px;border:1px solid #1b5d8d;border-radius:8px;background:#0a2237;color:#9ed8ff;font-size:10px;font-weight:800;white-space:nowrap}.status::before{content:"◷";font-size:12px}.metrics{position:relative;z-index:1;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin-bottom:15px}.metric{position:relative;min-height:98px;background:linear-gradient(145deg,#0b1c2e,#0a1625);border:1px solid #1a4568;border-radius:11px;padding:13px 12px 10px;overflow:hidden;box-shadow:inset 0 1px 0 rgba(255,255,255,.025)}.metric::after{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--metric-accent,#25a8ff)}.metric .metricIcon{display:block;color:var(--metric-accent,#25a8ff);font-size:22px;line-height:1;margin-bottom:9px;filter:drop-shadow(0 0 7px color-mix(in srgb,var(--metric-accent,#25a8ff) 35%,transparent))}.metric .label{font-size:10px;color:#b8c8d8;display:block;line-height:1.15}.metric b{font-size:22px;line-height:1;display:block;margin-top:5px;color:#f3f7fb}.metric small{display:block;color:#7e9ab5;margin-top:5px;font-size:9px}.metric.missing b{color:#71859d;font-size:18px}.metric.shots{--metric-accent:#28a9ff;border-color:rgba(40,169,255,.55)}.metric.sot{--metric-accent:#18d2ad;border-color:rgba(24,210,173,.45)}.metric.goals{--metric-accent:#b86cff;border-color:rgba(184,108,255,.55)}.metric.fouls{--metric-accent:#f0aa38;border-color:rgba(240,170,56,.48)}.metric.corners{--metric-accent:#ec5cae;border-color:rgba(236,92,174,.52)}.metric.yellow{--metric-accent:#ffd35a;border-color:rgba(255,211,90,.55)}.metric.tackles{--metric-accent:#52b6ff;border-color:rgba(82,182,255,.45)}.metric.throwins{--metric-accent:#9b8cff;border-color:rgba(155,140,255,.45)}.metric.offsides{--metric-accent:#ff7b7b;border-color:rgba(255,123,123,.45)}.record{display:none}.rec{padding:9px;background:#0c1827;border:1px solid #193452;border-radius:8px;text-align:center}.rec b{display:block;font-size:17px}.rec span{color:var(--muted);font-size:10px}.metricExtra{grid-column:1/-1;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:0}.recent{position:relative;z-index:1;margin-top:2px}.recentHead{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:0 0 8px}.recent h3,.summary h3,.compare h3{margin:0;font-size:14px}.recentBadge{color:#9fc2df;font-size:10px;font-weight:700}.result{font-weight:900}.win{color:var(--green)}.draw{color:var(--yellow)}.loss{color:var(--red)}.summaryGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.summary{background:#091524;border:1px solid var(--line);border-radius:13px;padding:13px}.summary ul{margin:8px 0 0;padding-left:19px;color:#cbd8e7}.summary li{margin:6px 0}.compare{margin-top:14px}.sourceNote{position:relative;z-index:1;margin-top:12px;padding:10px 11px;border:1px solid #17466d;border-left:3px solid var(--blue);border-radius:9px;background:linear-gradient(90deg,#091b2c,#091624);color:#a9bfd3;font-size:10px}.missingText{color:#71859d}.footer{color:var(--muted);font-size:11px;padding:8px 2px 22px}
-.prematchBox{margin:10px 0 12px;padding:11px;border:1px solid #2a4868;border-radius:11px;background:linear-gradient(135deg,#0b1827,#0a1421)}.prematchHead{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}.prematchHead b{font-size:14px}.prematchGrid{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:7px}.pmItem{background:#0d1a29;border:1px solid #1c3855;border-radius:8px;padding:8px;min-width:0}.pmItem .pmLabel{font-size:9px;color:var(--muted);display:block;text-transform:uppercase;letter-spacing:.3px}.pmItem strong{display:block;margin-top:3px;font-size:13px}.pmItem small{display:block;margin-top:2px;color:#7994af;font-size:9px;line-height:1.25}.pmItem.tension{border-color:rgba(255,211,90,.35)}.pmItem.tension strong{color:#ffd35a}.pmItem.pressure strong{color:#8fd4ff}.pmItem.offensive strong{color:#73e5ba}.recentCompact{width:100%;table-layout:fixed;border-collapse:collapse!important;border-spacing:0;overflow:hidden;border:1px solid #102d49;border-radius:9px;background:#071523}.recentCompact th,.recentCompact td{padding:4px 3px!important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-bottom:1px solid #102b44!important;text-align:center}.recentCompact th{background:#0a1b2e;color:#86add0;font-size:7.5px!important;font-weight:800;line-height:1.05}.recentCompact td{font-size:8px!important;color:#d5e1ec;line-height:1.1}.recentCompact tbody tr:last-child td{border-bottom:0!important}.recentCompact tbody tr:hover td{background:#0c2135}.recentCompact th:nth-child(1){width:6%}.recentCompact th:nth-child(2){width:14%}.recentCompact th:nth-child(3){width:18%}.recentCompact th:nth-child(4){width:5%}.recentCompact th:nth-child(5){width:8%}.recentCompact th:nth-child(6){width:7%}.recentCompact th:nth-child(7),.recentCompact th:nth-child(8),.recentCompact th:nth-child(9),.recentCompact th:nth-child(10),.recentCompact th:nth-child(11),.recentCompact th:nth-child(12),.recentCompact th:nth-child(13){width:6%}.recentCompact .compCell{display:block;min-width:0}.recentCompact .compCell i{font-style:normal;color:#7bb8e9;margin-right:2px}.recentCompact .rivalCell span{color:#6f8ba5}.recentCompact .result{text-align:center}.recentCompact .resultPill{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:18px;padding:0 5px;border-radius:999px;font-weight:900;font-size:8px;background:#12334b;color:#a9c6da}.recentCompact .win .resultPill{background:#0c9b72;color:#d9fff4}.recentCompact .draw .resultPill{background:#d89525;color:#fff4d4}.recentCompact .loss .resultPill{background:#d8377b;color:#ffe1ec}.recentCompact .scoreCell{font-weight:800;text-align:center;color:#dbe8f3}.recentCompact .statCell{text-align:center;font-weight:700;color:#cfe0ef}.noScroll{overflow:visible!important;max-height:none}.recentCompact{min-width:0}@media(max-width:1100px){.prematchGrid{grid-template-columns:1fr 1fr}.metrics{grid-template-columns:repeat(3,1fr)}.recentCompact th{font-size:7px!important}.recentCompact td{font-size:7.5px!important}}@media(max-width:950px){.metrics{grid-template-columns:repeat(3,1fr)}.dual,.summaryGrid,.matchHero{grid-template-columns:1fr}.kick{padding:8px}.bar{top:59px}}@media(max-width:600px){.wrap{padding:8px}.metrics{grid-template-columns:repeat(2,1fr)}.prematchGrid{grid-template-columns:1fr 1fr}.today table,.recent table{min-width:0;font-size:9px}.today th,.today td{padding:6px 4px}.teamCell{min-width:0;gap:5px}.miniCrest{width:24px;height:24px;flex-basis:24px}}
+.briefBox{margin:0 0 12px;padding:12px;border:1px solid #2a4a5a;border-radius:12px;background:linear-gradient(180deg,#0b1822,#071018)}.briefBox p{margin:6px 0;color:#d5e6f2;font-size:13px;line-height:1.45}.prematchBox{margin:10px 0 12px;padding:11px;border:1px solid #2a4868;border-radius:11px;background:linear-gradient(135deg,#0b1827,#0a1421)}.prematchHead{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}.prematchHead b{font-size:14px}.prematchGrid{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:7px}.pmItem{background:#0d1a29;border:1px solid #1c3855;border-radius:8px;padding:8px;min-width:0}.pmItem .pmLabel{font-size:9px;color:var(--muted);display:block;text-transform:uppercase;letter-spacing:.3px}.pmItem strong{display:block;margin-top:3px;font-size:13px}.pmItem small{display:block;margin-top:2px;color:#7994af;font-size:9px;line-height:1.25}.pmItem.tension{border-color:rgba(255,211,90,.35)}.pmItem.tension strong{color:#ffd35a}.pmItem.pressure strong{color:#8fd4ff}.pmItem.offensive strong{color:#73e5ba}.recentCompact{width:100%;table-layout:fixed;border-collapse:collapse!important;border-spacing:0;overflow:hidden;border:1px solid #102d49;border-radius:9px;background:#071523}.recentCompact th,.recentCompact td{padding:4px 3px!important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-bottom:1px solid #102b44!important;text-align:center}.recentCompact th{background:#0a1b2e;color:#86add0;font-size:7.5px!important;font-weight:800;line-height:1.05}.recentCompact td{font-size:8px!important;color:#d5e1ec;line-height:1.1}.recentCompact tbody tr:last-child td{border-bottom:0!important}.recentCompact tbody tr:hover td{background:#0c2135}.recentCompact th:nth-child(1){width:6%}.recentCompact th:nth-child(2){width:14%}.recentCompact th:nth-child(3){width:18%}.recentCompact th:nth-child(4){width:5%}.recentCompact th:nth-child(5){width:8%}.recentCompact th:nth-child(6){width:7%}.recentCompact th:nth-child(7),.recentCompact th:nth-child(8),.recentCompact th:nth-child(9),.recentCompact th:nth-child(10),.recentCompact th:nth-child(11),.recentCompact th:nth-child(12),.recentCompact th:nth-child(13){width:6%}.recentCompact .compCell{display:block;min-width:0}.recentCompact .compCell i{font-style:normal;color:#7bb8e9;margin-right:2px}.recentCompact .rivalCell span{color:#6f8ba5}.recentCompact .result{text-align:center}.recentCompact .resultPill{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:18px;padding:0 5px;border-radius:999px;font-weight:900;font-size:8px;background:#12334b;color:#a9c6da}.recentCompact .win .resultPill{background:#0c9b72;color:#d9fff4}.recentCompact .draw .resultPill{background:#d89525;color:#fff4d4}.recentCompact .loss .resultPill{background:#d8377b;color:#ffe1ec}.recentCompact .scoreCell{font-weight:800;text-align:center;color:#dbe8f3}.recentCompact .statCell{text-align:center;font-weight:700;color:#cfe0ef}.noScroll{overflow:visible!important;max-height:none}.recentCompact{min-width:0}@media(max-width:1100px){.prematchGrid{grid-template-columns:1fr 1fr}.metrics{grid-template-columns:repeat(3,1fr)}.recentCompact th{font-size:7px!important}.recentCompact td{font-size:7.5px!important}}@media(max-width:950px){.metrics{grid-template-columns:repeat(3,1fr)}.dual,.summaryGrid,.matchHero{grid-template-columns:1fr}.kick{padding:8px}.bar{top:59px}}@media(max-width:600px){.wrap{padding:8px}.metrics{grid-template-columns:repeat(2,1fr)}.prematchGrid{grid-template-columns:1fr 1fr}.today table,.recent table{min-width:0;font-size:9px}.today th,.today td{padding:6px 4px}.teamCell{min-width:0;gap:5px}.miniCrest{width:24px;height:24px;flex-basis:24px}}
 /* FIX18 women's match highlight — rosa sutil */
 .womensRow td{background:rgba(224,145,177,.055)!important;border-top:1px solid rgba(224,145,177,.28);border-bottom:1px solid rgba(224,145,177,.28)}
 .womensRow td:first-child{border-left:3px solid rgba(224,145,177,.58)}
@@ -4833,7 +5151,7 @@ header{text-align:center;padding:24px 30px;border-bottom:1px solid var(--line);b
 .leagueTable tr.in8 td{background:rgba(201,221,3,.06)}
 
 .hotChip{border-color:#ffd35a;color:#ffe7a3}
-.htBox{margin:8px 0;padding:10px;border:1px solid #2a4868;border-radius:11px;background:#0a1a2b}.cornerBox{margin:8px 0;padding:10px;border:1px solid #2a5a4a;border-radius:11px;background:#071a16}.cornerBox.alta{border-color:#2d8f6a}.cornerBox.media{border-color:#3a6e8f}.cornerBox.baja{border-color:#3a4a58}.cornerHead{display:flex;justify-content:space-between;gap:8px;align-items:baseline;margin-bottom:6px}.cornerHead b{color:#7dffc4}.cornerGrid{display:grid;grid-template-columns:repeat(6,1fr);gap:7px}.cornerGrid div{background:#061310;border-radius:8px;padding:7px}.cornerGrid strong{display:block;font-size:15px}.cornerGrid span{color:#8fb8aa;font-size:10px}.matchCornerBox{margin:0 0 12px;padding:12px;border:1px solid #2a5a4a;border-radius:12px;background:linear-gradient(180deg,#0a221c,#071611)}
+.htBox{margin:8px 0;padding:10px;border:1px solid #2a4868;border-radius:11px;background:#0a1a2b}.cornerBox{margin:8px 0;padding:10px;border:1px solid #2a5a4a;border-radius:11px;background:#071a16}.cornerBox.alta{border-color:#2d8f6a}.cornerBox.media{border-color:#3a6e8f}.cornerBox.baja{border-color:#3a4a58}.cornerHead{display:flex;justify-content:space-between;gap:8px;align-items:baseline;margin-bottom:6px}.cornerHead b{color:#7dffc4}.cornerGrid{display:grid;grid-template-columns:repeat(6,1fr);gap:7px}.cornerGrid div{background:#061310;border-radius:8px;padding:7px}.cornerGrid strong{display:block;font-size:15px}.cornerGrid span{color:#8fb8aa;font-size:10px}.matchCornerBox{margin:0 0 12px;padding:12px;border:1px solid #2a5a4a;border-radius:12px;background:linear-gradient(180deg,#0a221c,#071611)}.lineGrid{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin:8px 0}.lineCell{background:#061310;border-radius:8px;padding:7px;text-align:center}.lineCell strong{display:block;color:#8fe0c4;font-size:11px}.lineCell b{display:block;font-size:16px}.lineCell span{color:#8fb8aa;font-size:10px}.discBox{margin:0 0 12px;padding:12px;border:1px solid #5a4a1a;border-radius:12px;background:#141107}.discRow{display:grid;grid-template-columns:88px 1fr auto;gap:8px;align-items:baseline;padding:7px 8px;border-radius:8px;margin-top:6px;background:#1a160c}.discRow.clean{border-left:3px solid #27d39a}.discRow.mid{border-left:3px solid #ffd35a}.discRow.dirty{border-left:3px solid #f0aa38}.discRow.filthy{border-left:3px solid #ff5c68}.discRow small{grid-column:1/-1;color:#9a8d68;font-size:10px}.cardRisk{margin:8px 0;padding:10px;border:1px solid #5a4a1a;border-radius:11px;background:#161207}.riskRow{display:grid;grid-template-columns:22px 1fr auto;gap:6px;align-items:baseline;padding:4px 0;border-bottom:1px solid #2a2412}.riskN{color:#ffd35a;font-weight:800;font-size:11px}.riskName{color:#f0e6c8}.riskRow b{color:#ffe08a}.riskRow small{grid-column:2/-1;color:#9a8d68;font-size:10px}.cmpUp{display:inline-block;width:8px;height:8px;border-radius:50%;background:#27d39a;margin-left:6px;vertical-align:middle;box-shadow:0 0 6px rgba(39,211,154,.35)}.cmpDown{display:inline-block;width:8px;height:8px;border-radius:50%;background:#ff5c68;margin-left:6px;vertical-align:middle;opacity:.85}.cmpEq{display:inline-block;width:8px;height:8px;border-radius:50%;background:#5d7388;margin-left:6px;vertical-align:middle;opacity:.7}
 .htGrid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:8px}
 .htGrid div{background:#071421;border-radius:8px;padding:8px}
 .htGrid strong{display:block;font-size:18px;color:#ffd35a}
@@ -5025,21 +5343,78 @@ function cornerInsight(t){
     <div class="h2hMeta">${p.sample} partido(s) con córners reales. 3+ en ${p.hit3}% · 4+ en ${p.hit4}% · 5+ en ${p.hit5}%. No es predicción.</div>
   </div>`;
 }
-function matchCornerBox(h,a){
+function listNum(recent,key){
+  return (recent||[]).map(x=>x[key]).filter(v=>v!=null&&v!=='').map(Number).filter(v=>!Number.isNaN(v));
+}
+function disciplineSide(t){
+  const ys=listNum(t.recent,'yellow');
+  const avgM=t.metrics&&t.metrics.yellow&&t.metrics.yellow.average;
+  const avg=ys.length?(ys.reduce((a,b)=>a+b,0)/ys.length):(avgM!=null?Number(avgM):null);
+  if(avg==null||Number.isNaN(avg)) return {avg:null,label:'Sin dato',tone:'na',n:0,over2:null};
+  let label='NORMAL',tone='mid';
+  if(avg<=1.3){label='LIMPIO';tone='clean';}
+  else if(avg<=2.1){label='NORMAL';tone='mid';}
+  else if(avg<=3.1){label='SUCIO';tone='dirty';}
+  else {label='MUY SUCIO';tone='filthy';}
+  const n=ys.length||t.metrics.yellow.available_matches||0;
+  const over2=ys.length?Math.round(100*ys.filter(v=>v>=3).length/ys.length):null;
+  return {avg:Number(avg.toFixed(2)),label,tone,n,over2};
+}
+function disciplineBox(h,a,pre){
+  const dh=disciplineSide(h||{}), da=disciplineSide(a||{});
+  if(dh.avg==null && da.avg==null){
+    return `<div class="discBox"><b>🟨 EQUIPOS LIMPIOS / SUCIOS</b><div class="h2hMeta">No hay amarillas verificables para armar el ranking.</div></div>`;
+  }
+  const rank=[
+    {team:(h&&h.team)||'Local',d:dh},
+    {team:(a&&a.team)||'Visita',d:da}
+  ].sort((x,y)=>(x.d.avg==null?99:x.d.avg)-(y.d.avg==null?99:y.d.avg));
+  const need=[pre&&pre.home&&pre.home.need&&pre.home.need.level, pre&&pre.away&&pre.away.need&&pre.away.need.level].filter(Boolean);
+  const needNote=need.some(x=>String(x).toLowerCase()==='alta')
+    ? 'Hay necesidad alta de ganar: el ranking de tarjetas puede subir en este partido.'
+    : 'El ranking usa la forma reciente. Si el partido se pone feo o hay que ganar sí o sí, las tarjetas suelen subir.';
+  const row=x=>`<div class="discRow ${x.d.tone}"><b>${esc(x.d.label)}</b><span>${esc(x.team)}</span><strong>${x.d.avg==null?'—':x.d.avg}</strong><small>${x.d.n||0} PJ · ${x.d.over2==null?'':(x.d.over2+'% con 3+ amarillas')}</small></div>`;
+  return `<div class="discBox"><b>🟨 RANKING · MÁS LIMPIO → MÁS SUCIO</b>
+    ${rank.map(row).join('')}
+    <div class="h2hMeta">${needNote} Promedio = amarillas propias por partido. No es el árbitro ni una predicción.</div>
+  </div>`;
+}
+function matchCornerBox(h,a,h2h){
   const hp=h&&h.corner_profile||{}, ap=a&&a.corner_profile||{};
-  if(!hp.available && !ap.available){
+  const hc=listNum(h&&h.recent,'corners'), ac=listNum(a&&a.recent,'corners');
+  if(!hp.available && !ap.available && !hc.length && !ac.length){
     return `<div class="matchCornerBox"><b>🚩 CÓRNERS DEL PARTIDO</b><div class="h2hMeta">Ningún equipo trajo córners verificables. No se estima el total.</div></div>`;
   }
-  const line=(p,name)=>p.available?`<div><b>${esc(name)}</b> · prom ${p.average} · rango ${esc(p.range)} · 3+ ${p.hit3}% · 4+ ${p.hit4}% · 5+ ${p.hit5}% (${p.sample} PJ)</div>`:`<div><b>${esc(name)}</b> · sin córners en la fuente</div>`;
-  let extra='';
-  if(hp.available && ap.available){
-    const tot=(Number(hp.average)+Number(ap.average)).toFixed(1);
-    const lo=Number(hp.min)+Number(ap.min), hi=Number(hp.max)+Number(ap.max);
-    extra=`<div class="h2hMeta" style="margin-top:8px">Suma de promedios (descriptiva): <b>${tot} córners</b> · suma de rangos ${lo}–${hi}. No trata dos calendarios como un solo duelo.</div>`;
+  const line=(p,name,vals)=>p.available?`<div><b>${esc(name)}</b> · prom ${p.average} · rango ${esc(p.range)} · 3+ ${p.hit3}% · 4+ ${p.hit4}% · 5+ ${p.hit5}% (${p.sample} PJ)</div>`:`<div><b>${esc(name)}</b> · ${vals.length?('prom '+(vals.reduce((x,y)=>x+y,0)/vals.length).toFixed(1)):'sin córners en la fuente'}</div>`;
+  const h2hSums=[];
+  ((h2h&&h2h.matches)||[]).forEach(r=>{
+    const p=(r.stats||{}).corners;
+    if(p&&p.home!=null&&p.away!=null) h2hSums.push(Number(p.home)+Number(p.away));
+  });
+  const formSums=[];
+  if(hc.length && ac.length){
+    hc.forEach(x=>ac.forEach(y=>formSums.push(x+y)));
   }
-  return `<div class="matchCornerBox"><b>🚩 CÓRNERS · LECTURA DEL CRUCE</b>${line(hp,h.team||'Local')}${line(ap,a.team||'Visitante')}${extra}</div>`;
+  const use=h2hSums.length>=3?h2hSums:formSums;
+  const src=h2hSums.length>=3?'duelos directos (H2H)':'forma reciente (córners propios de cada uno, sumados)';
+  const lines=[5.5,6.5,7.5,8.5,9.5];
+  let grid='';
+  if(use.length){
+    grid=`<div class="lineGrid">${lines.map(ln=>{
+      const hits=use.filter(v=>v>ln).length;
+      const pct=Math.round(hits*100/use.length);
+      return `<div class="lineCell"><strong>+${ln}</strong><b>${pct}%</b><span>${hits}/${use.length}</span></div>`;
+    }).join('')}</div>`;
+  }
+  let extra='';
+  if((hp.available||hc.length) && (ap.available||ac.length)){
+    const ha=hp.available?Number(hp.average):(hc.reduce((x,y)=>x+y,0)/hc.length);
+    const aa=ap.available?Number(ap.average):(ac.reduce((x,y)=>x+y,0)/ac.length);
+    extra=`<div class="h2hMeta" style="margin-top:8px">Suma de promedios: <b>${(ha+aa).toFixed(1)} córners</b> · líneas con ${src}. No es cuota.</div>`;
+  }
+  return `<div class="matchCornerBox"><b>🚩 CÓRNERS TOTALES DEL PARTIDO</b>${line(hp,h.team||'Local',hc)}${line(ap,a.team||'Visitante',ac)}${grid}${extra}</div>`;
 }
-function teamBlock(t,side){const ok=t.source_status!=='UNAVAILABLE';const logo=t.logo||"";const accentSide=side==='away'?'awayBox':'homeBox';const m=t.metrics||{};const teamMeta=[t.competition||t.league||t.recent?.[0]?.competition,t.country].filter(Boolean).join(' · ')||'Histórico verificable';const card=(icon,label,key,cls)=>{const v=m[key]?.average;const missing=v==null;return `<div class="metric ${cls||''} ${missing?'missing':''}"><span class="metricIcon">${icon}</span><span class="label">${label}</span><b>${fmt(v)}</b><small>por partido</small></div>`};return `<section class="teamBox ${accentSide}"><div class="teamTitle"><div class="boxTitle">${logo?`<img class="boxCrest" src="${esc(logo)}">`:``}<div><b>${esc(t.team)}</b><span class="teamMeta">${esc(teamMeta)}</span></div></div><span class="status">Últimos ${Math.min(20,t.recent?.length||20)} partidos</span></div><div class="metrics">${card('◢','Remates','shots','shots')}${card('▥','Tiros a puerta','sot','sot')}${card('⚽','Goles','goals_for','goals')}${card('⏱','Goles 1T (equipo)','goals_ht_for','goals')}${card('⏱','Goles 1T (partido)','goals_ht_total','goals')}${card('⚑','Faltas','fouls','fouls')}${card('🟨','Amarillas','yellow','yellow')}${card('⚑','Córners','corners','corners')}<div class="metricExtra">${card('🛡','Tackles','tackles','tackles')}${card('↔','Saques de banda','throwins','throwins')}${card('🚩','Offsides','offsides','offsides')}${card('↯','Tiros libres','freekicks','freekicks')}${card('🥅','Saques de meta','goalkicks','goalkicks')}${card('🧤','Atajadas','saves','saves')}${card('✚','Centros','crosses','crosses')}${card('▣','Remates bloqueados','blockedshots','blockedshots')}${card('〽','Palo/Travesaño','woodwork','woodwork')}${card('⚡','Ataques peligrosos','dangerousattacks','dangerousattacks')}</div></div>${htInsight(t)}${cornerInsight(t)}<div class="recent noScroll"><div class="recentHead"><h3>📅 Últimos ${Math.min(20,t.recent?.length||0)} partidos</h3><span class="recentBadge">Histórico verificable</span></div><table class="recentCompact"><thead><tr><th>Fecha</th><th>Competición</th><th>Rival</th><th>R</th><th>Marcador</th><th>Goles 1T</th><th>Remates</th><th>Tiros a puerta</th><th>Faltas</th><th>Amarillas</th><th>Córners</th><th>Tackles</th><th>Offsides</th></tr></thead><tbody>${recentRows(t)}</tbody></table></div><div class="sourceNote">ⓘ ${ok?`Fuente: ${esc(t.source)}. Los promedios usan solo partidos donde la fuente entregó ese campo.`:`⚠️ ${esc(t.reason||'Dato no disponible')}. No se muestran valores estimados.`}</div></section>`}
+function teamBlock(t,side){const ok=t.source_status!=='UNAVAILABLE';const logo=t.logo||"";const accentSide=side==='away'?'awayBox':'homeBox';const m=t.metrics||{};const teamMeta=[t.competition||t.league||t.recent?.[0]?.competition,t.country].filter(Boolean).join(' · ')||'Histórico verificable';const card=(icon,label,key,cls)=>{const v=m[key]?.average;const missing=v==null;return `<div class="metric ${cls||''} ${missing?'missing':''}"><span class="metricIcon">${icon}</span><span class="label">${label}</span><b>${fmt(v)}</b><small>por partido</small></div>`};return `<section class="teamBox ${accentSide}"><div class="teamTitle"><div class="boxTitle">${logo?`<img class="boxCrest" src="${esc(logo)}">`:``}<div><b>${esc(t.team)}</b><span class="teamMeta">${esc(teamMeta)}</span></div></div><span class="status">Últimos ${Math.min(20,t.recent?.length||20)} partidos</span></div><div class="metrics">${card('◢','Remates','shots','shots')}${card('▥','Tiros a puerta','sot','sot')}${card('⚽','Goles','goals_for','goals')}${card('⏱','Goles 1T (equipo)','goals_ht_for','goals')}${card('⏱','Goles 1T (partido)','goals_ht_total','goals')}${card('⚑','Faltas','fouls','fouls')}${card('🟨','Amarillas','yellow','yellow')}${card('⚑','Córners','corners','corners')}<div class="metricExtra">${card('🛡','Tackles','tackles','tackles')}${card('↔','Saques de banda','throwins','throwins')}${card('🚩','Offsides','offsides','offsides')}${card('↯','Tiros libres','freekicks','freekicks')}${card('🥅','Saques de meta','goalkicks','goalkicks')}${card('🧤','Atajadas','saves','saves')}${card('✚','Centros','crosses','crosses')}${card('▣','Remates bloqueados','blockedshots','blockedshots')}${card('〽','Palo/Travesaño','woodwork','woodwork')}${card('⚡','Ataques peligrosos','dangerousattacks','dangerousattacks')}</div></div>${htInsight(t)}${cornerInsight(t)}${cardRiskBox(t)}<div class="recent noScroll"><div class="recentHead"><h3>📅 Últimos ${Math.min(20,t.recent?.length||0)} partidos</h3><span class="recentBadge">Histórico verificable</span></div><table class="recentCompact"><thead><tr><th>Fecha</th><th>Competición</th><th>Rival</th><th>R</th><th>Marcador</th><th>Goles 1T</th><th>Remates</th><th>Tiros a puerta</th><th>Faltas</th><th>Amarillas</th><th>Córners</th><th>Tackles</th><th>Offsides</th></tr></thead><tbody>${recentRows(t)}</tbody></table></div><div class="sourceNote">ⓘ ${ok?`Fuente: ${esc(t.source)}. Los promedios usan solo partidos donde la fuente entregó ese campo.`:`⚠️ ${esc(t.reason||'Dato no disponible')}. No se muestran valores estimados.`}</div></section>`}
 function summary(t){if(t.source_status==='UNAVAILABLE')return `<div class="summary"><h3>📈 Resumen estadístico — ${esc(t.team)}</h3><ul><li class="missingText">Dato no disponible porque la fuente no entregó un histórico verificable.</li></ul></div>`;const m=t.metrics||{};const fmtm=k=>m[k]?.average==null?'Dato no disponible':Number(m[k].average).toFixed(2);return `<div class="summary"><h3>📈 Resumen estadístico — ${esc(t.team)}</h3><ul><li>Promedio de goles: <b>${fmtm('goals_for')}</b>.</li><li>Promedio de goles en 1.º tiempo: <b>${fmtm('goals_ht_for')}</b>.</li><li>Promedio de remates: <b>${fmtm('shots')}</b>.</li><li>Promedio de remates al arco: <b>${fmtm('sot')}</b>.</li><li>Promedio de córners: <b>${fmtm('corners')}</b>.</li><li>Promedio de tarjetas amarillas: <b>${fmtm('yellow')}</b>.</li><li>Posesión media: <b>${m.possession?.average==null?'Dato no disponible':Number(m.possession.average).toFixed(2)+'%'}</b>.</li><li>Promedio de saques de banda: <b>${fmtm('throwins')}</b>.</li><li>Promedio de tackles: <b>${fmtm('tackles')}</b>.</li><li>Promedio de offsides: <b>${fmtm('offsides')}</b>.</li><li>Promedio de tiros libres: <b>${fmtm('freekicks')}</b>.</li><li>Promedio de saques de meta: <b>${fmtm('goalkicks')}</b>.</li><li>Promedio de atajadas: <b>${fmtm('saves')}</b>.</li><li>Promedio de centros: <b>${fmtm('crosses')}</b>.</li><li>Promedio de remates bloqueados: <b>${fmtm('blockedshots')}</b>.</li><li>Promedio de palo/travesaño: <b>${fmtm('woodwork')}</b>.</li><li>Promedio de ataques: <b>${fmtm('attacks')}</b>.</li><li>Promedio de ataques peligrosos: <b>${fmtm('dangerousattacks')}</b>.</li></ul></div>`}
 function leagueTableBlock(t){
   if(!t||!t.available||!(t.rows||[]).length) return '';
@@ -5069,6 +5444,17 @@ function pickList(arr, empty){
   if(!arr||!arr.length) return `<div class="bettorNote">${empty}</div>`;
   return `<div class="ticketLegs">${arr.map(x=>`<span class="ticketChip ${x.rate>=100?'alwaysChip':(x.rate>=78?'hotChip':'')}">${esc(x.label||x)}${x.rate!=null?` · ${x.rate}%`:''}${x.hits&&x.sample?` (${x.hits}/${x.sample})`:''}</span>`).join('')}</div>`;
 }
+function briefingBox(p){
+  const b=p&&p.briefing;
+  if(!b||!b.available||!(b.paragraphs||[]).length){
+    const h=p&&p.home||{}, a=p&&p.away||{};
+    const vh=h.venue||{}, va=a.venue||{};
+    const lines=[vh.shots_note,va.shots_note,va.away_form_note].filter(Boolean);
+    if(!lines.length) return '';
+    return `<div class="briefBox"><b>🧭 LECTURA PREMATCH</b>${lines.map(x=>`<p>${esc(x)}</p>`).join('')}</div>`;
+  }
+  return `<div class="briefBox"><b>🧭 LECTURA PREMATCH</b>${b.paragraphs.map(x=>`<p>${esc(x)}</p>`).join('')}<div class="h2hMeta">Texto armado solo con tabla + últimos partidos reales. No es pronóstico.</div></div>`;
+}
 function prematchBlock(p){
   if(!p||!p.available) return `<div class="prematchBox"><div class="prematchHead"><b>🧭 PREMATCH BUILDER</b><span class="sub">Dato no disponible</span></div><div class="h2hMeta">No se pudo armar el contexto de tabla, necesidad e intensidad.</div></div>`;
   const h=p.home||{},a=p.away||{},ts=p.tension||{},b=p.builder||{},inten=p.intensity||{};
@@ -5077,6 +5463,7 @@ function prematchBlock(p){
   return `<div class="prematchBox">
     <div class="prematchHead"><b>🧭 PREMATCH BUILDER</b><span class="sub">${esc(p.competition||'Competición')}${p.round?' · '+esc(p.round):''}</span></div>
     ${intensityMeter(inten)}
+    ${briefingBox(p)}
     ${styleReading(p)}
     ${leagueTableBlock(p.league_table)}
     <div class="prematchGrid">
@@ -5143,8 +5530,8 @@ async function loadMatch(m){
  };
  const state={d:null,h2h:{available:false},prematch:{available:false},bettor:{available:false}};
  body.innerHTML=`<div class="statsLoading"><span class="spinner"></span><span>Cargando estadísticas principales…</span></div>`;
- const teamP=getJson('/api/team-stats?home='+qs(m.local)+'&away='+qs(m.visita)+'&limit=20',55000).then(d=>{state.d=d;return d}).catch(e=>({error:e.name==='AbortError'?'Tiempo de espera agotado al consultar estadísticas.':e.message}));
- const h2hP=getJson('/api/h2h?home='+qs(m.local)+'&away='+qs(m.visita),55000).then(d=>{state.h2h=d;return d}).catch(e=>({available:false,has_previous:null,reason:e.name==='AbortError'?'Tiempo de espera agotado al consultar el H2H.':(e.message||'No se pudo completar la consulta H2H.')}));
+ const teamP=getJson('/api/team-stats?home='+qs(m.local)+'&away='+qs(m.visita)+'&home_id='+qs(m.home_id||'')+'&away_id='+qs(m.away_id||'')+'&limit=20',55000).then(d=>{state.d=d;return d}).catch(e=>({error:e.name==='AbortError'?'Tiempo de espera agotado al consultar estadísticas.':e.message}));
+ const h2hP=getJson('/api/h2h?home='+qs(m.local)+'&away='+qs(m.visita)+'&home_id='+qs(m.home_id||'')+'&away_id='+qs(m.away_id||''),55000).then(d=>{state.h2h=d;return d}).catch(e=>({available:false,has_previous:null,reason:e.name==='AbortError'?'Tiempo de espera agotado al consultar el H2H.':(e.message||'No se pudo completar la consulta H2H.')}));
  const preP=getJson('/api/prematch?home='+qs(m.local)+'&away='+qs(m.visita)+'&date='+qs(m.fecha||selectedDate),55000).then(d=>{state.prematch=d;return d}).catch(()=>({available:false}));
  const betP=getJson('/api/bettor-prematch?home='+qs(m.local)+'&away='+qs(m.visita),20000).then(d=>{state.bettor=d;return d}).catch(()=>({available:false}));
  await Promise.allSettled([teamP,h2hP,preP,betP]);
@@ -5154,7 +5541,7 @@ async function loadMatch(m){
    return;
  }
  const logoHome=d.home?.logo||'';
- body.innerHTML=`<div class="matchHero"><div class="teamHero home">${logoHome?`<img class="crest" src="${esc(logoHome)}"/>`:''}<h2>${esc(d.home.team)}</h2><div class="sub">Local</div></div><div class="kick"><b>${esc(m.hora||'Hora no indicada')} <span style="display:inline;color:#8bdcff;font-size:10px">PE</span></b><span>${esc(m.liga)}</span><span>${esc(m.pais)}</span></div><div class="teamHero away">${d.away?.logo?`<img class="crest" src="${esc(d.away.logo)}"/>`:''}<h2>${esc(d.away.team)}</h2><div class="sub">Visitante</div></div></div>${prematchBlock(state.prematch)}${bettorPrematchBlock(state.bettor)}${matchCornerBox(d.home,d.away)}<div class="dual">${teamBlock(d.home,'home')}${teamBlock(d.away,'away')}</div>${h2hBlock(state.h2h)}<div class="summaryGrid" style="margin-top:14px">${summary(d.home)}${summary(d.away)}</div><div class="panel compare"><h3>⚖️ Comparación estadística</h3><table><thead><tr><th>Estadística</th><th>${esc(d.home.team)}</th><th>${esc(d.away.team)}</th></tr></thead><tbody>${[['Goles','goals_for',false],['Goles 1T','goals_ht_for',false],['Remates','shots',false],['Remates al arco','sot',false],['Córners','corners',false],['Posesión','possession',true],['Faltas','fouls',false],['Amarillas','yellow',false],['Rojas','red',false],['Saques de banda','throwins',false],['Tackles','tackles',false],['Offsides','offsides',false],['Tiros libres','freekicks',false],['Saques de meta','goalkicks',false],['Atajadas','saves',false],['Centros','crosses',false],['Remates bloqueados','blockedshots',false],['Palo/travesaño','woodwork',false],['Ataques','attacks',false],['Ataques peligrosos','dangerousattacks',false]].map(x=>`<tr><td>${x[0]}</td><td>${fmt(d.home.metrics?.[x[1]]?.average,x[2])}</td><td>${fmt(d.away.metrics?.[x[1]]?.average,x[2])}</td></tr>`).join('')}</tbody></table><div class="sourceNote">Fuente principal: ${esc(d.home?.source||'—')}${d.home?.source_status==='FALLBACK'?' (alternativa)':''}. ${esc(d.home?.source_note||d.away?.source_note||'')} No hay pronóstico. Esta pantalla solo describe encuentros históricos entregados por la fuente. Un campo ausente permanece como <b>Dato no disponible</b>.</div></div>`;
+ body.innerHTML=`<div class="matchHero"><div class="teamHero home">${logoHome?`<img class="crest" src="${esc(logoHome)}"/>`:''}<h2>${esc(d.home.team)}</h2><div class="sub">Local</div></div><div class="kick"><b>${esc(m.hora||'Hora no indicada')} <span style="display:inline;color:#8bdcff;font-size:10px">PE</span></b><span>${esc(m.liga)}</span><span>${esc(m.pais)}</span></div><div class="teamHero away">${d.away?.logo?`<img class="crest" src="${esc(d.away.logo)}"/>`:''}<h2>${esc(d.away.team)}</h2><div class="sub">Visitante</div></div></div>${prematchBlock(state.prematch)}${bettorPrematchBlock(state.bettor)}${matchCornerBox(d.home,d.away,state.h2h)}${disciplineBox(d.home,d.away,state.prematch)}<div class="dual">${teamBlock(d.home,'home')}${teamBlock(d.away,'away')}</div>${h2hBlock(state.h2h)}<div class="summaryGrid" style="margin-top:14px">${summary(d.home)}${summary(d.away)}</div><div class="panel compare"><h3>⚖️ Comparación estadística</h3><table><thead><tr><th>Estadística</th><th>${esc(d.home.team)}</th><th>${esc(d.away.team)}</th></tr></thead><tbody>${[['Goles','goals_for',false],['Goles 1T','goals_ht_for',false],['Remates','shots',false],['Remates al arco','sot',false],['Córners','corners',false],['Posesión','possession',true],['Faltas','fouls',false],['Amarillas','yellow',false],['Rojas','red',false],['Saques de banda','throwins',false],['Tackles','tackles',false],['Offsides','offsides',false],['Tiros libres','freekicks',false],['Saques de meta','goalkicks',false],['Atajadas','saves',false],['Centros','crosses',false],['Remates bloqueados','blockedshots',false],['Palo/travesaño','woodwork',false],['Ataques','attacks',false],['Ataques peligrosos','dangerousattacks',false]].map(x=>{const hv=d.home.metrics?.[x[1]]?.average, av=d.away.metrics?.[x[1]]?.average; const ic=cmpIcon(hv,av); return `<tr><td>${x[0]}</td><td>${fmt(hv,x[2])}${ic[0]}</td><td>${fmt(av,x[2])}${ic[1]}</td></tr>`;}).join('')}</tbody></table><div class="sourceNote">Fuente principal: ${esc(d.home?.source||'—')}${d.home?.source_status==='FALLBACK'?' (alternativa)':''}. ${esc(d.home?.source_note||d.away?.source_note||'')} No hay pronóstico. Esta pantalla solo describe encuentros históricos entregados por la fuente. Un campo ausente permanece como <b>Dato no disponible</b>.</div></div>`;
 }
 function closeStatsModal(){const overlay=document.getElementById('detailHost');overlay.classList.remove('open');overlay.setAttribute('aria-hidden','true');document.body.classList.remove('modalOpen')}
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeStatsModal()});document.getElementById('detailHost').addEventListener('click',e=>{if(e.target.id==='detailHost')closeStatsModal()});
@@ -5274,6 +5661,27 @@ function decorateWomensRows(){
 let activeFilter="men";
 let sortDirection="asc";
 function rowHtml(m){const star=isTopFlightJS(m)?`<span class="topStar" title="Primera división / competición de élite">★</span>`:"";const cup=isCupJS(m)?`<span class="cupTag" title="Copa / torneo eliminatorio">🏆</span>`:"";const shownStatus=(String(m.estado||"").toLowerCase()==="programado"&&m.hora)?m.hora:(m.estado||"—");const watch=watchFlags(m);return `<tr class="${watch.cls}" data-womens="${isWomensMatchJS(m)?'1':'0'}" data-topflight="${isTopFlightJS(m)?'1':'0'}"><td>${m.n}${watch.mark}</td><td>${esc(m.pais)}</td><td>${star}${cup}${esc(m.liga)}</td><td><b>${esc(m.hora||"—")}</b></td><td><div class="teamCell">${crest(m.logo_l,m.local)}<b>${esc(m.local)}</b></div></td><td><div class="teamCell">${crest(m.logo_v,m.visita)}<b>${esc(m.visita)}</b></div></td><td>${esc(shownStatus)}</td><td><button type="button" class="load" data-n="${m.n}" onclick="return loadMatchByN(${m.n})">📊 Ver estadísticas</button></td></tr>`}
+
+function cardRiskBox(t){
+  const c=t.card_risk||{};
+  if(!c.available || !(c.players||[]).length){
+    return `<div class="cardRisk"><b>🟨 AMARILLAS POR JUGADOR</b><div class="h2hMeta">${esc(c.reason||'La fuente no publicó ranking de amarillas de este equipo.')}</div></div>`;
+  }
+  const rows=c.players.map((p,i)=>{
+    const pct=p.pct==null?'—':(p.pct+'%');
+    const samp=p.matches!=null?`${p.yellows} amarillas en ${p.matches} PJ`:`${p.yellows} amarillas`;
+    return `<div class="riskRow"><span class="riskN">${i+1}</span><span class="riskName">${esc(p.name)}</span><b>${pct}</b><small>${esc(samp)}</small></div>`;
+  }).join('');
+  return `<div class="cardRisk"><b>🟨 MÁS PROPENSOS A AMARILLA · ${esc(t.team)}</b>${rows}<div class="h2hMeta">% = amarillas / partidos de liga actual (techo 92%). No es cuota ni predicción del once.</div></div>`;
+}
+function cmpIcon(h,a){
+  if(h==null || a==null) return ['',''];
+  const hv=Number(h), av=Number(a);
+  if(Number.isNaN(hv)||Number.isNaN(av)) return ['',''];
+  if(hv>av) return ['<i class="cmpUp" title="Mayor">●</i>','<i class="cmpDown" title="Menor">●</i>'];
+  if(av>hv) return ['<i class="cmpDown" title="Menor">●</i>','<i class="cmpUp" title="Mayor">●</i>'];
+  return ['<i class="cmpEq" title="Igual">●</i>','<i class="cmpEq" title="Igual">●</i>'];
+}
 function cardHtml(m){
   const watch=watchFlags(m);
   const shownStatus=(String(m.estado||"").toLowerCase()==="programado"&&m.hora)?m.hora:(m.estado||"—");
@@ -5514,8 +5922,9 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 qs=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
                 home=(qs.get("home") or [""])[0].strip(); away=(qs.get("away") or [""])[0].strip()
+                hid=(qs.get("home_id") or [""])[0].strip(); aid=(qs.get("away_id") or [""])[0].strip()
                 if not home or not away: raise ValueError("Faltan equipos")
-                h2h=h2h_summary(home,away); h2h["home"]=home; h2h["away"]=away
+                h2h=h2h_summary(home,away,home_id=hid,away_id=aid); h2h["home"]=home; h2h["away"]=away
                 body=json.dumps(h2h,ensure_ascii=False).encode("utf-8")
                 self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.end_headers(); self._write_body(body)
             except Exception as e:
@@ -5537,16 +5946,22 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 qs=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
                 home=(qs.get("home") or [""])[0].strip(); away=(qs.get("away") or [""])[0].strip(); limit=min(20,max(5,int((qs.get("limit") or [20])[0])))
+                hid=(qs.get("home_id") or [""])[0].strip(); aid=(qs.get("away_id") or [""])[0].strip()
                 if not home or not away: raise ValueError("Faltan equipos")
-                # Consultar ambos equipos en paralelo para que la UI responda mucho antes.
                 from concurrent.futures import ThreadPoolExecutor
-                with ThreadPoolExecutor(max_workers=2) as pool:
-                    fh=pool.submit(summarize_team,home,limit,away)
-                    fa=pool.submit(summarize_team,away,limit,home)
-                    h=fh.result()
-                    a=fa.result()
+                with ThreadPoolExecutor(max_workers=4) as pool:
+                    fh=pool.submit(summarize_team,home,limit,away,hid)
+                    fa=pool.submit(summarize_team,away,limit,home,aid)
+                    h=fh.result(); a=fa.result()
+                    th=hid or resolve_fotmob_id(home, away)
+                    ta=aid or resolve_fotmob_id(away, home)
+                    ch=pool.submit(fotmob_card_risk, th, 5)
+                    ca=pool.submit(fotmob_card_risk, ta, 5)
+                    h["card_risk"]=ch.result(); a["card_risk"]=ca.result()
+                    h["fotmob_id"]=th; a["fotmob_id"]=ta
                 sources=sorted(set([h.get("source"),a.get("source")]))
-                h["logo"]=resolve_team_logo(home) or logo_for(home); a["logo"]=resolve_team_logo(away) or logo_for(away) or espn_team_logo(away)
+                h["logo"]=fotmob_logo_url(th) or resolve_team_logo(home) or logo_for(home)
+                a["logo"]=fotmob_logo_url(ta) or resolve_team_logo(away) or logo_for(away)
                 payload={"home":h,"away":a,"source":" + ".join(sources)}
                 body=json.dumps(payload,ensure_ascii=False).encode("utf-8")
                 self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.end_headers(); self._write_body(body)

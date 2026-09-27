@@ -70,7 +70,9 @@ def application(environ, start_response):
         elif path == "/api/h2h":
             home = (qs.get("home") or [""])[0].strip()
             away = (qs.get("away") or [""])[0].strip()
-            h2h = desk.h2h_summary(home, away)
+            hid = (qs.get("home_id") or [""])[0].strip()
+            aid = (qs.get("away_id") or [""])[0].strip()
+            h2h = desk.h2h_summary(home, away, home_id=hid, away_id=aid)
             h2h["home"] = home
             h2h["away"] = away
             status, headers, body = _json(h2h)
@@ -81,13 +83,19 @@ def application(environ, start_response):
         elif path == "/api/team-stats":
             home = (qs.get("home") or [""])[0].strip()
             away = (qs.get("away") or [""])[0].strip()
+            hid = (qs.get("home_id") or [""])[0].strip()
+            aid = (qs.get("away_id") or [""])[0].strip()
             limit = min(20, max(5, int((qs.get("limit") or [20])[0])))
             from concurrent.futures import ThreadPoolExecutor
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                h = pool.submit(desk.summarize_team, home, limit, away).result()
-                a = pool.submit(desk.summarize_team, away, limit, home).result()
-            h["logo"] = desk.resolve_team_logo(home) or desk.logo_for(home)
-            a["logo"] = desk.resolve_team_logo(away) or desk.logo_for(away)
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                h = pool.submit(desk.summarize_team, home, limit, away, hid).result()
+                a = pool.submit(desk.summarize_team, away, limit, home, aid).result()
+                th = hid or desk.resolve_fotmob_id(home, away)
+                ta = aid or desk.resolve_fotmob_id(away, home)
+                h["card_risk"] = desk.fotmob_card_risk(th, 5)
+                a["card_risk"] = desk.fotmob_card_risk(ta, 5)
+            h["logo"] = desk.fotmob_logo_url(th) or desk.resolve_team_logo(home) or desk.logo_for(home)
+            a["logo"] = desk.fotmob_logo_url(ta) or desk.resolve_team_logo(away) or desk.logo_for(away)
             status, headers, body = _json({"home": h, "away": a, "source": h.get("source")})
         elif path == "/api/team-logo":
             name = (qs.get("name") or [""])[0].strip()
