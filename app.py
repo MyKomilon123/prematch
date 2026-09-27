@@ -11,6 +11,7 @@ import os
 import urllib.parse
 import urllib.request
 import urllib.error
+import re
 import webbrowser
 import threading
 from datetime import datetime, timedelta, timezone
@@ -685,23 +686,202 @@ def espn_recent_team_stats(name, limit=RECENT_LIMIT):
     return out
 
 
+
+# ---------------- API-Football: fuente estable para servidores ----------------
+# Opcional pero recomendada en Render. Configurar en Environment:
+#   API_FOOTBALL_KEY = <tu clave de API-Sports / API-Football>
+#
+# API-Football permite obtener los últimos partidos de un equipo y recuperar
+# estadísticas de hasta 20 fixtures mediante una sola consulta por lote.
+API_FOOTBALL = "https://v3.football.api-sports.io"
+API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY", "").strip()
+
+def _api_football_get(path, params=None, timeout=18):
+    if not API_FOOTBALL_KEY:
+        raise RuntimeError("API_FOOTBALL_KEY no está configurada")
+    qs=urllib.parse.urlencode(params or {})
+    url=API_FOOTBALL + path + (("?" + qs) if qs else "")
+    req=urllib.request.Request(url, headers={
+        "x-apisports-key": API_FOOTBALL_KEY,
+        "Accept":"application/json",
+        "User-Agent":"PrematchStatsDesk/3.0",
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        raw=r.read().decode("utf-8") or ""
+        data=json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("API-Football devolvió una respuesta inválida")
+    errors=data.get("errors") or {}
+    if errors:
+        raise RuntimeError("API-Football: " + str(errors))
+    return data
+
+def _api_stat_value(items, *names):
+    wanted={str(x).strip().lower() for x in names}
+    for item in items or []:
+        typ=str(item.get("type") or "").strip().lower()
+        if typ in wanted:
+            v=item.get("value")
+            if isinstance(v,str):
+                m=re.search(r"-?\d+(?:\.\d+)?",v.replace(",",".")) if v else None
+                return float(m.group()) if m else None
+            return float(v) if isinstance(v,(int,float)) else None
+    return None
+
+@lru_cache(maxsize=256)
+def api_football_team_meta(name):
+    data=_api_football_get("/teams", {"search": name}, timeout=15)
+    response=data.get("response") or []
+    wanted=_norm_team_name(name)
+    ranked=[]
+    for obj in response:
+        team=obj.get("team") or {}
+        nm=team.get("name") or ""
+        norm=_norm_team_name(nm)
+        score=100 if norm==wanted else (70 if _names_compatible(name,nm) else 0)
+        if score:
+            ranked.append((score,team))
+    if not ranked:
+        raise ValueError(f"API-Football no encontró el equipo: {name}")
+    ranked.sort(key=lambda x:x[0], reverse=True)
+    team=ranked[0][1]
+    return {"id":int(team["id"]), "name":team.get("name") or name, "logo":team.get("logo") or ""}
+
+def api_football_recent_team_stats(name, limit=RECENT_LIMIT):
+    meta=api_football_team_meta(name)
+    tid=meta["id"]
+    data=_api_football_get("/fixtures", {
+        "team": tid,
+        "last": min(20, max(5, int(limit))),
+        "status": "FT-AET-PEN",
+    }, timeout=18)
+    fixtures=data.get("response") or []
+    if not fixtures:
+        raise ValueError("API-Football no entregó partidos finalizados")
+
+    # Una sola consulta para los detalles/estadísticas de hasta 20 fixtures.
+    ids=[]
+    for fx in fixtures[:limit]:
+        fid=((fx.get("fixture") or {}).get("id"))
+        if fid:
+            ids.append(str(fid))
+    details={}
+    if ids:
+        batch="-".join(ids[:20])
+        try:
+            full=_api_football_get("/fixtures", {"ids":batch}, timeout=22)
+            for fx in full.get("response") or []:
+                fid=((fx.get("fixture") or {}).get("id"))
+                if fid:
+                    details[int(fid)]=fx
+        except Exception:
+            # Los marcadores siguen siendo utilizables aunque una liga no
+            # publique estadísticas detalladas.
+            details={}
+
+    out=[]
+    for fx in fixtures[:limit]:
+        fid=((fx.get("fixture") or {}).get("id"))
+        if not fid:
+            continue
+        fx=details.get(int(fid),fx)
+        teams=fx.get("teams") or {}
+        home=teams.get("home") or {}
+        away=teams.get("away") or {}
+        home_id=int(home.get("id") or 0)
+        away_id=int(away.get("id") or 0)
+        is_home=home_id==tid
+        if not is_home and away_id!=tid:
+            continue
+        goals=fx.get("goals") or {}
+        score=fx.get("score") or {}
+        ht=score.get("halftime") or {}
+        hs=goals.get("home"); vs=goals.get("away")
+        if hs is None or vs is None:
+            continue
+        result="G" if ((hs>vs) if is_home else (vs>hs)) else ("E" if hs==vs else "P")
+        stats_by_team={}
+        for block in fx.get("statistics") or []:
+            bteam=block.get("team") or {}
+            bid=int(bteam.get("id") or 0)
+            stats_by_team[bid]=block.get("statistics") or []
+        items=stats_by_team.get(tid) or []
+        def val(*names):
+            return _api_stat_value(items,*names)
+
+        # API-Football usa estos nombres en /fixtures (statistics).
+        row={
+            "event_id":fid,
+            "date":((fx.get("fixture") or {}).get("date")),
+            "opponent":(away.get("name") if is_home else home.get("name")) or "—",
+            "venue":"Local" if is_home else "Visitante",
+            "goals_for":hs if is_home else vs,
+            "goals_against":vs if is_home else hs,
+            "goals_ht_for":ht.get("home") if is_home else ht.get("away"),
+            "goals_ht_against":ht.get("away") if is_home else ht.get("home"),
+            "goals_ht_total":((ht.get("home") or 0)+(ht.get("away") or 0)) if (ht.get("home") is not None or ht.get("away") is not None) else None,
+            "result":result,
+            "competition":((fx.get("league") or {}).get("name") or "—"),
+            "shots":val("total shots"),
+            "sot":val("shots on goal"),
+            "corners":val("corner kicks"),
+            "yellow":val("yellow cards"),
+            "red":val("red cards"),
+            "possession":val("ball possession"),
+            "fouls":val("fouls"),
+            "throwins":val("throw-ins","throw ins"),
+            "tackles":val("tackles"),
+            "offsides":val("offsides"),
+            "freekicks":val("free kicks"),
+            "goalkicks":val("goal kicks"),
+            "saves":val("goalkeeper saves"),
+            "crosses":None,
+            "blockedshots":val("blocked shots"),
+            "woodwork":None,
+            "attacks":None,
+            "dangerousattacks":None,
+        }
+        out.append(row)
+    if not out:
+        raise ValueError("API-Football no entregó partidos utilizables")
+    return out, meta
+
 # ---------------- FotMob: últimos 20 partidos reales ----------------
 # SofaScore responde 403 en muchas redes. FotMob /api/data sí entrega
 # fixtures y estadísticas de partido verificables sin API key.
 def _fotmob_get(url, timeout=14):
-    req=urllib.request.Request(url,headers={
+    headers={
         "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept":"application/json, text/plain, */*",
         "Referer":"https://www.fotmob.com/",
         "Origin":"https://www.fotmob.com",
         "Accept-Language":"es-PE,es;q=0.9,en;q=0.8",
-    })
-    with urllib.request.urlopen(req,timeout=timeout) as r:
-        raw=r.read().decode("utf-8") or ""
-        if not raw.strip():
-            return {}
-        data=json.loads(raw)
-        return data if isinstance(data, dict) else {}
+    }
+    last=None
+    for attempt in range(3):
+        try:
+            req=urllib.request.Request(url,headers=headers)
+            with urllib.request.urlopen(req,timeout=timeout) as r:
+                raw=r.read().decode("utf-8") or ""
+                if not raw.strip():
+                    return {}
+                data=json.loads(raw)
+                return data if isinstance(data, dict) else {}
+        except urllib.error.HTTPError as e:
+            last=e
+            # Reintentar solo errores transitorios; un 403 no se arregla
+            # repitiendo la misma petición y debe activar el fallback.
+            if e.code not in (408,429,500,502,503,504):
+                raise
+            import time
+            time.sleep(0.6*(attempt+1))
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            last=e
+            import time
+            time.sleep(0.6*(attempt+1))
+    if last:
+        raise last
+    return {}
 
 _FOTMOB_SEED = {
     "arsenal":9825,"chelsea":8455,"liverpool":8650,"manchester city":8456,"man city":8456,
@@ -1126,12 +1306,12 @@ def fotmob_recent_team_stats(name, limit=RECENT_LIMIT, peer="", team_id=None):
                 start=_dt.fromisoformat(str(finished[-1][0]).replace("Z","+00:00")).date()-_td(days=1)
             except Exception:
                 pass
-        dates=[(start-_td(days=i)).strftime("%Y%m%d") for i in range(0,220)]
+        dates=[(start-_td(days=i)).strftime("%Y%m%d") for i in range(0,151)]
         from concurrent.futures import ThreadPoolExecutor
-        for pos in range(0,len(dates),12):
+        for pos in range(0,len(dates),15):
             if len(finished)>=limit: break
-            batch=dates[pos:pos+12]
-            with ThreadPoolExecutor(max_workers=8) as pool:
+            batch=dates[pos:pos+15]
+            with ThreadPoolExecutor(max_workers=5) as pool:
                 chunks=list(pool.map(lambda d:_fotmob_matches_on_day(d,tid), batch))
             extra=[]
             for rows in chunks:
@@ -1295,6 +1475,20 @@ def india_recent_team_stats(name, limit=RECENT_LIMIT):
 
 def summarize_team_with_fallback(name,limit=RECENT_LIMIT, peer="", team_id=None):
     errors=[]
+
+    # En Render, usar una API con clave evita depender de bloqueos anti-bot
+    # sobre la IP compartida de la plataforma.
+    if API_FOOTBALL_KEY:
+        try:
+            rows,meta=api_football_recent_team_stats(name,limit)
+            if rows:
+                summary=_summary_from_rows(name,rows,"API-Football")
+                summary["api_team_id"]=meta["id"]
+                summary["api_team_logo"]=meta.get("logo") or ""
+                return summary
+        except Exception as e:
+            errors.append(f"API-Football: {_http_error_kind(e)}")
+
     try:
         rows=fotmob_recent_team_stats(name,limit,peer=peer,team_id=team_id)
         if rows:
@@ -1323,7 +1517,7 @@ def summarize_team_with_fallback(name,limit=RECENT_LIMIT, peer="", team_id=None)
             return _summary_from_rows(name,rows,"India Super Division",source_status="FALLBACK") | {"source_note":" · ".join(errors)+". Marcadores publicados de Super Division India; SofaScore API 403."}
     except Exception as e:
         errors.append(f"India: {_http_error_kind(e)}")
-    return _unavailable_summary(name," · ".join(errors)+" No se muestran valores inventados.","FotMob + SofaScore + ESPN")
+    return _unavailable_summary(name," · ".join(errors)+" No se muestran valores inventados.","API-Football + FotMob + SofaScore + ESPN")
 
 def _unavailable_summary(name, reason, source="SofaScore"):
     fields={k:{"average":None,"range":None,"available_matches":0} for k in ("goals_for","goals_ht_for","goals_ht_against","goals_ht_total","shots","sot","corners","yellow","red","possession","fouls","throwins","tackles","offsides","freekicks","goalkicks","saves","crosses","blockedshots","woodwork","attacks","dangerousattacks")}
@@ -5945,29 +6139,91 @@ class Handler(BaseHTTPRequestHandler):
         if urllib.parse.urlsplit(self.path).path == "/api/team-stats":
             try:
                 qs=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-                home=(qs.get("home") or [""])[0].strip(); away=(qs.get("away") or [""])[0].strip(); limit=min(20,max(5,int((qs.get("limit") or [20])[0])))
-                hid=(qs.get("home_id") or [""])[0].strip(); aid=(qs.get("away_id") or [""])[0].strip()
-                if not home or not away: raise ValueError("Faltan equipos")
+                home=(qs.get("home") or [""])[0].strip()
+                away=(qs.get("away") or [""])[0].strip()
+                limit=min(20,max(5,int((qs.get("limit") or [20])[0])))
+                hid=(qs.get("home_id") or [""])[0].strip()
+                aid=(qs.get("away_id") or [""])[0].strip()
+                if not home or not away:
+                    raise ValueError("Faltan equipos")
+
                 from concurrent.futures import ThreadPoolExecutor
-                with ThreadPoolExecutor(max_workers=4) as pool:
+                with ThreadPoolExecutor(max_workers=2) as pool:
                     fh=pool.submit(summarize_team,home,limit,away,hid)
                     fa=pool.submit(summarize_team,away,limit,home,aid)
-                    h=fh.result(); a=fa.result()
-                    th=hid or resolve_fotmob_id(home, away)
-                    ta=aid or resolve_fotmob_id(away, home)
-                    ch=pool.submit(fotmob_card_risk, th, 5)
-                    ca=pool.submit(fotmob_card_risk, ta, 5)
-                    h["card_risk"]=ch.result(); a["card_risk"]=ca.result()
-                    h["fotmob_id"]=th; a["fotmob_id"]=ta
+                    h=fh.result()
+                    a=fa.result()
+
+                # Nunca dejar que el módulo de tarjetas/logo derribe todo
+                # el endpoint si la fuente secundaria está bloqueada.
+                th=None
+                ta=None
+                if h.get("source")=="API-Football":
+                    h["fotmob_id"]=None
+                    h["card_risk"]={"available":False,"players":[],"reason":"Tarjetas de jugadores no solicitadas a FotMob."}
+                    h["logo"]=h.get("api_team_logo") or resolve_team_logo(home) or logo_for(home)
+                else:
+                    try:
+                        th=hid or resolve_fotmob_id(home, away)
+                    except Exception:
+                        th=None
+                    if th:
+                        try:
+                            h["card_risk"]=fotmob_card_risk(th,5)
+                        except Exception as e:
+                            h["card_risk"]={"available":False,"players":[],"reason":str(e)[:160]}
+                    else:
+                        h["card_risk"]={"available":False,"players":[],"reason":"Sin ID de FotMob"}
+                    h["fotmob_id"]=th
+                    try:
+                        h["logo"]=fotmob_logo_url(th) or resolve_team_logo(home) or logo_for(home)
+                    except Exception:
+                        h["logo"]=resolve_team_logo(home) or logo_for(home)
+
+                if a.get("source")=="API-Football":
+                    a["fotmob_id"]=None
+                    a["card_risk"]={"available":False,"players":[],"reason":"Tarjetas de jugadores no solicitadas a FotMob."}
+                    a["logo"]=a.get("api_team_logo") or resolve_team_logo(away) or logo_for(away)
+                else:
+                    try:
+                        ta=aid or resolve_fotmob_id(away, home)
+                    except Exception:
+                        ta=None
+                    if ta:
+                        try:
+                            a["card_risk"]=fotmob_card_risk(ta,5)
+                        except Exception as e:
+                            a["card_risk"]={"available":False,"players":[],"reason":str(e)[:160]}
+                    else:
+                        a["card_risk"]={"available":False,"players":[],"reason":"Sin ID de FotMob"}
+                    a["fotmob_id"]=ta
+                    try:
+                        a["logo"]=fotmob_logo_url(ta) or resolve_team_logo(away) or logo_for(away)
+                    except Exception:
+                        a["logo"]=resolve_team_logo(away) or logo_for(away)
+
                 sources=sorted(set([h.get("source"),a.get("source")]))
-                h["logo"]=fotmob_logo_url(th) or resolve_team_logo(home) or logo_for(home)
-                a["logo"]=fotmob_logo_url(ta) or resolve_team_logo(away) or logo_for(away)
                 payload={"home":h,"away":a,"source":" + ".join(sources)}
                 body=json.dumps(payload,ensure_ascii=False).encode("utf-8")
-                self.send_response(200); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Cache-Control","no-store"); self.end_headers(); self._write_body(body)
+                self.send_response(200)
+                self.send_header("Content-Type","application/json; charset=utf-8")
+                self.send_header("Cache-Control","no-store")
+                self.end_headers()
+                self._write_body(body)
             except Exception as e:
-                body=json.dumps({"error":str(e)},ensure_ascii=False).encode("utf-8")
-                self.send_response(502); self.send_header("Content-Type","application/json; charset=utf-8"); self.end_headers(); self._write_body(body)
+                # El frontend ya sabe mostrar "error"; devolvemos 200 para
+                # que un bloqueo puntual de un proveedor no se convierta en
+                # un 502 genérico.
+                body=json.dumps({
+                    "error":str(e),
+                    "home":{"team":home if 'home' in locals() else "","matches":0,"metrics":{},"recent":[],"source":"UNAVAILABLE"},
+                    "away":{"team":away if 'away' in locals() else "","matches":0,"metrics":{},"recent":[],"source":"UNAVAILABLE"},
+                },ensure_ascii=False).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type","application/json; charset=utf-8")
+                self.send_header("Cache-Control","no-store")
+                self.end_headers()
+                self._write_body(body)
             return
         if urllib.parse.urlsplit(self.path).path == "/api/team-logo":
             try:
